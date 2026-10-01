@@ -1,11 +1,31 @@
 <div align="center">
 
-  <img src="assets/webui-vulkan.png" width="300" alt="Render Changer WebUI — Vulkan">
-  <img src="assets/webui-opengl.png" width="300" alt="Render Changer WebUI — OpenGL">
+### 👇
+
+  <p>
+    <a href="https://github.com/EXLOUD/Render-Switcher/releases/download/v1.0.0/Render_Switcher_v1.0.0.zip">
+      <img src="https://img.shields.io/badge/Download_Render_Switcher-2ea44f?style=flat&logo=download&logoColor=white" height="40" alt="Download Render Switcher">
+    </a>
+  </p>
+
+---
+
+### 👀 Статистика репозиторію
+
+  <img alt="GitHub Views" src="https://count.getloli.com/get/@:EXLOUD-Render-Switcher?theme=rule34" />
+
+  **⭐ Якщо модуль став вам у пригоді, поставте зірочку! ⭐**
+
+---
 
   <h1>Render Switcher</h1>
 
   **Мова:** [English](README.md) | [Українська](#)
+
+  <p>
+    <img src="assets/webui-vulkan.png" width="300" alt="Render Switcher WebUI — Vulkan">
+    <img src="assets/webui-opengl.png" width="300" alt="Render Switcher WebUI — OpenGL">
+  </p>
 
   ![Версія](https://img.shields.io/badge/Версія-v1.0.0-6d4dee?style=for-the-badge)
   ![Root](https://img.shields.io/badge/Magisk%20%7C%20KernelSU%20%7C%20APatch-222222?style=for-the-badge)
@@ -61,7 +81,7 @@ Render Switcher дозволяє обрати, який HWUI-бекенд вик
 - Інтерфейс англійською та українською
 - Системна опція **Always GPU screen composition** (`persist.skia.force_gpu`)
 
-Відкривайте його зі списку модулів у менеджері root. Якщо WebUI повідомляє, що Zygisk відсутній, увімкніть Zygisk (Magisk) або встановіть реалізацію Zygisk (KernelSU / APatch).
+Відкривайте його зі списку модулів у менеджері root.
 
 ## 💻 Командний рядок
 
