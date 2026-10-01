@@ -1,7 +1,27 @@
 <div align="center">
 
-  <img src="assets/webui-vulkan.png" width="300" alt="Render Changer WebUI — Vulkan">
-  <img src="assets/webui-opengl.png" width="300" alt="Render Changer WebUI — OpenGL">
+  <p>
+    <a href="https://github.com/EXLOUD/Render-Switcher/releases/download/v1.0.0/Render_Switcher_v1.0.0.zip">
+      <img src="https://img.shields.io/badge/Download_Render_Switcher-2ea44f?style=flat&logo=download&logoColor=white" height="40" alt="Download Render Switcher">
+    </a>
+  </p>
+
+  ---
+  
+  ### 👀 Repository Stats
+  
+   <img alt="GitHub Views" src="https://count.getloli.com/get/@:EXLOUD-Render-Switcher?theme=rule34" />
+
+   **⭐ If this tool helped you, please consider giving it a star! ⭐**
+
+</div>
+
+---
+
+<div align="center">
+
+  <img src="assets/webui-vulkan.png" width="300" alt="Render Switcher WebUI — Vulkan">
+  <img src="assets/webui-opengl.png" width="300" alt="Render Switcher WebUI — OpenGL">
 
   <h1>Render Switcher</h1>
 
@@ -61,7 +81,7 @@ Only packages listed in `targets.conf` are touched. Apps that are not targets ar
 - English and Ukrainian interface
 - System option **Always GPU screen composition** (`persist.skia.force_gpu`)
 
-Open it from your root manager's module list. If the WebUI says Zygisk is missing, enable Zygisk (Magisk) or install a Zygisk implementation (KernelSU / APatch).
+Open it from your root manager's module list.
 
 ## 💻 CLI
 
