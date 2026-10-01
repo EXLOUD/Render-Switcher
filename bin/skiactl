@@ -1,0 +1,158 @@
+#!/system/bin/sh
+MODDIR="/data/adb/modules/render_switcher"
+[ -d "$MODDIR/common" ] || MODDIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+
+. "$MODDIR/common/state.sh"
+. "$MODDIR/common/utils.sh"
+. "$MODDIR/common/logging.sh"
+. "$MODDIR/common/properties.sh"
+. "$MODDIR/common/targets.sh"
+
+ensure_persistent_state
+load_settings
+_targets_sync_module
+
+usage() {
+    cat <<'U'
+Render Switcher control
+
+  skiactl status
+  skiactl renderer get|set <skiavk|skiagl>
+  skiactl target list
+  skiactl target add <pkg> <renderer>
+  skiactl target remove <pkg>
+  skiactl target get <pkg>
+  skiactl target set <pkg> <renderer>
+  skiactl target enable|disable <pkg>
+  skiactl zygisk
+  skiactl logs
+  skiactl packages [user|system|all]
+  skiactl help
+
+Per-app overrides are applied by the Zygisk companion reading targets.conf.
+U
+}
+
+cmd_status() {
+    echo "Render Switcher status"
+    echo "-------------"
+    echo "Global renderer : $(renderer_get_global)"
+    echo "Data dir        : $DATA_DIR"
+    echo "Targets file    : $TARGETS_CONF"
+    echo "Per-app path    : Zygisk (targets.conf)"
+    echo ""
+    echo "Targets:"
+    target_list || echo "(none)"
+}
+
+cmd_renderer() {
+    case "$1" in
+        get) renderer_get_global ;;
+        set)
+            is_valid_renderer "$2" || { echo "Use skiavk or skiagl" >&2; exit 1; }
+            if renderer_set_global "$2"; then
+                save_setting GLOBAL_RENDERER "$2"
+                echo "Global renderer set to $2"
+            else
+                exit 5
+            fi
+            ;;
+        *) echo "renderer get|set" >&2; exit 1 ;;
+    esac
+}
+
+# Restart the app so the Zygisk hook re-reads targets.conf on next launch.
+force_stop_pkg() {
+    has_cmd am || return 0
+    if am force-stop "$1" >/dev/null 2>&1; then
+        log_info "force-stop: $1"
+        echo "Force-stopped: $1"
+    else
+        log_info "force-stop failed: $1"
+    fi
+}
+
+cmd_target() {
+    case "$1" in
+        add|remove|set|enable|disable)
+            acquire_lock targets 10 || { echo "ERROR: targets busy" >&2; exit 6; }
+            trap 'release_lock targets' EXIT INT TERM
+            ;;
+    esac
+    case "$1" in
+        list) target_list ;;
+        add) target_add "$2" "$3" && echo "Target added: $2 -> $3" || exit $?; force_stop_pkg "$2" ;;
+        remove)
+            target_remove "$2" || exit $?
+            # Confirm gone from file (stdout is what WebUI relies on)
+            if target_exists "$2"; then
+                echo "ERROR: still present after remove: $2" >&2
+                exit 3
+            fi
+            echo "Removed: $2"
+            force_stop_pkg "$2"
+            ;;
+        get)
+            r=$(target_get_renderer "$2") || { echo "Not found" >&2; exit 2; }
+            echo "$2 -> $r"
+            target_is_enabled "$2" && echo "enabled: yes" || echo "enabled: no"
+            ;;
+        set)
+            target_set_renderer "$2" "$3" || { rc=$?; echo "ERROR: set failed (rc=$rc): $2" >&2; exit $rc; }
+            # Verify what is actually on disk before reporting success
+            now=$(target_get_renderer "$2")
+            if [ "$now" != "$3" ]; then
+                echo "ERROR: not persisted: $2 is '$now', wanted '$3'" >&2
+                exit 3
+            fi
+            echo "Updated: $2 -> $3"
+            force_stop_pkg "$2"
+            ;;
+        enable)  target_set_enabled "$2" 1 && echo "Enabled: $2" || exit $?; force_stop_pkg "$2" ;;
+        disable) target_set_enabled "$2" 0 && echo "Disabled: $2" || exit $?; force_stop_pkg "$2" ;;
+        *) echo "Unknown target subcommand" >&2; exit 1 ;;
+    esac
+}
+
+# Prints "ok" if a Zygisk implementation is active, otherwise "missing".
+cmd_zygisk() {
+    # Magisk built-in Zygisk (Settings -> Zygisk)
+    if has_cmd magisk; then
+        v=$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk'" 2>/dev/null \
+            | sed -n 's/^value=//p' | head -n 1)
+        if [ "$v" = "1" ]; then echo ok; return 0; fi
+    fi
+    # Zygisk Next / ReZygisk / NeoZygisk (KernelSU, APatch, Magisk)
+    for d in /data/adb/modules/*; do
+        [ -d "$d" ] || continue
+        [ -f "$d/disable" ] && continue
+        [ -f "$d/remove" ] && continue
+        id=${d##*/}
+        case "$id" in
+            zygisksu|rezygisk|neozygisk|zygisk_next|zygisknext) echo ok; return 0 ;;
+        esac
+        nm=$(sed -n 's/^name=//p' "$d/module.prop" 2>/dev/null | head -n 1)
+        case "$nm" in
+            "Zygisk Next"*|ReZygisk*|NeoZygisk*|"Zygisk Next - "*) echo ok; return 0 ;;
+        esac
+    done
+    echo missing
+    return 1
+}
+
+cmd_logs() {
+    [ -f "$LOG_FILE" ] && tail -n 100 "$LOG_FILE" || echo "(no logs)"
+}
+
+[ $# -lt 1 ] && { usage; exit 1; }
+cmd=$1; shift
+case "$cmd" in
+    status)   cmd_status ;;
+    renderer) cmd_renderer "$@" ;;
+    target)   cmd_target "$@" ;;
+    zygisk)   cmd_zygisk ;;
+    logs)     cmd_logs ;;
+    packages) list_installed_packages "${1:-user}" ;;
+    help|-h|--help) usage ;;
+    *) echo "Unknown: $cmd" >&2; usage; exit 1 ;;
+esac
