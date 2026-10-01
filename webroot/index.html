@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0c0f">
+<meta name="description" content="Render Switcher — per-app HWUI renderer control (Vulkan / OpenGL) for Magisk, KernelSU and APatch.">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data: ksu:; connect-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'">
+<title>Render Switcher</title>
+<link rel="stylesheet" href="style.css?v=6">
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="logo" id="logo">Render <b>Switcher</b></div>
+    <div class="header-actions">
+      <div class="lang-wrap">
+        <button type="button" class="lang-btn" id="langBtn" aria-haspopup="listbox" aria-expanded="false">
+          <span id="langLabel">UA</span><span class="chev">⌄</span>
+        </button>
+        <div class="lang-menu" id="langMenu" role="listbox">
+          <button type="button" data-lang="uk" role="option">Українська <span>UA</span></button>
+          <button type="button" data-lang="en" role="option">English <span>EN</span></button>
+        </div>
+      </div>
+      <div class="bridge" id="bridge" title="Bridge">
+        <i class="dot is-off" id="bridge-dot"></i>
+      </div>
+    </div>
+  </header>
+
+  <div id="no-bridge" class="banner hidden">
+    <p class="banner-title">WebUI bridge unavailable</p>
+    <p>Open from KernelSU, APatch, or Magisk WebUI.</p>
+  </div>
+
+  <main id="main"></main>
+
+  <nav class="nav" id="nav" role="tablist" aria-label="Render Switcher"></nav>
+</div>
+
+<script src="locales/uk.js?v=1"></script>
+<script src="locales/en.js?v=1"></script>
+<script src="script.js?v=7"></script>
+</body>
+</html>
