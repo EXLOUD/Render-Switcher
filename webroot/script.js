@@ -1,7 +1,7 @@
 /* Render Switcher WebUI — premium concept UI + skiactl backend */
 
 const SKIACTL = "/data/adb/modules/render_switcher/bin/skiactl";
-const APP_VERSION = "v1.0.0"; /* hard-coded; keep in sync with module.prop */
+const APP_VERSION = "v1.0.1"; /* hard-coded; keep in sync with module.prop */
 const LANG_KEY = "render_switcher_lang";
 const DEFAULT_LANG = "uk";
 const GPU_KEY = "render_switcher_force_gpu";
@@ -136,9 +136,28 @@ function parseTargetList(out) {
 }
 
 /** Extract HH:MM or HH:MM:SS from various timestamp formats */
+/** Normalize any HH:MM or HH:MM:SS (and pad hours) to HH:MM:SS. */
+function normalizeTime(t) {
+  const m = String(t || "").trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return "";
+  const hh = String(Math.min(23, parseInt(m[1], 10))).padStart(2, "0");
+  const mm = m[2];
+  const ss = m[3] != null ? m[3] : "00";
+  return hh + ":" + mm + ":" + ss;
+}
+
 function extractTime(line) {
-  const m = line.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
-  return m ? m[1] : "";
+  // Prefer full HH:MM:SS; fall back to HH:MM (normalized to :00)
+  const full = String(line || "").match(/\b(\d{1,2}:\d{2}:\d{2})\b/);
+  if (full) return normalizeTime(full[1]);
+  const short = String(line || "").match(/\b(\d{1,2}:\d{2})\b/);
+  return short ? normalizeTime(short[1]) : "";
+}
+
+function nowTime() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
 }
 
 /**
@@ -148,7 +167,11 @@ function extractTime(line) {
  * - GPU composition option change
  * Drop technical noise (boot, verify, applying props, etc.)
  */
-function humanizeEvent(raw) {
+/**
+ * Parse a raw log line into a structured event (language-agnostic).
+ * Message text is produced later by formatEvent() using the active locale.
+ */
+function parseEvent(raw) {
   const line = String(raw || "").trim();
   if (!line) return null;
 
@@ -162,10 +185,9 @@ function humanizeEvent(raw) {
   let m = body.match(/^(?:target(?:\s+added)?:\s*|Target added:\s*)([^\s=]+)\s*->\s*(skiavk|skiagl)\b/i);
   if (m) {
     return {
-      kind: "target",
-      msg: S.lang === "uk"
-        ? `Таргет: ${m[1]} → ${m[2] === "skiavk" ? "Vulkan" : "OpenGL"}`
-        : `Target: ${m[1]} → ${m[2] === "skiavk" ? "Vulkan" : "OpenGL"}`,
+      kind: "target_set",
+      pkg: m[1],
+      renderer: m[2],
       tag: m[2] === "skiavk" ? "VK" : "GL",
     };
   }
@@ -174,10 +196,9 @@ function humanizeEvent(raw) {
   m = body.match(/^Updated:\s*([^\s=]+)\s*->\s*(skiavk|skiagl)\b/i);
   if (m) {
     return {
-      kind: "target",
-      msg: S.lang === "uk"
-        ? `Оновлено: ${m[1]} → ${m[2] === "skiavk" ? "Vulkan" : "OpenGL"}`
-        : `Updated: ${m[1]} → ${m[2] === "skiavk" ? "Vulkan" : "OpenGL"}`,
+      kind: "target_upd",
+      pkg: m[1],
+      renderer: m[2],
       tag: m[2] === "skiavk" ? "VK" : "GL",
     };
   }
@@ -185,23 +206,16 @@ function humanizeEvent(raw) {
   // target removed / Removed:
   m = body.match(/^(?:target removed:\s*|Removed:\s*)(.+)$/i);
   if (m) {
-    const pkg = m[1].trim();
-    return {
-      kind: "target",
-      msg: S.lang === "uk" ? `Таргет знято: ${pkg}` : `Target removed: ${pkg}`,
-      tag: "",
-    };
+    return { kind: "target_rm", pkg: m[1].trim(), tag: "" };
   }
 
   // target pkg enabled=0|1
   m = body.match(/^target\s+(\S+)\s+enabled=([01])\b/i);
   if (m) {
-    const on = m[2] === "1";
     return {
-      kind: "target",
-      msg: S.lang === "uk"
-        ? (on ? `Таргет увімкнено: ${m[1]}` : `Таргет вимкнено: ${m[1]}`)
-        : (on ? `Target enabled: ${m[1]}` : `Target disabled: ${m[1]}`),
+      kind: "target_en",
+      pkg: m[1],
+      on: m[2] === "1",
       tag: "",
     };
   }
@@ -209,35 +223,65 @@ function humanizeEvent(raw) {
   // Enabled: / Disabled:
   m = body.match(/^(Enabled|Disabled):\s*(.+)$/i);
   if (m) {
-    const on = /^enabled$/i.test(m[1]);
     return {
-      kind: "target",
-      msg: S.lang === "uk"
-        ? (on ? `Таргет увімкнено: ${m[2]}` : `Таргет вимкнено: ${m[2]}`)
-        : `${on ? "Enabled" : "Disabled"}: ${m[2]}`,
+      kind: "target_en",
+      pkg: m[2].trim(),
+      on: /^enabled$/i.test(m[1]),
       tag: "",
     };
   }
 
-  // Global renderer set to X  |  applying debug.hwui.renderer=X (only when it's a real change)
+  // Global renderer set to X  |  applying debug.hwui.renderer=X
   m = body.match(/^(?:Global renderer set to\s+|applying debug\.hwui\.renderer=)(skiavk|skiagl)\b/i);
   if (m) {
     const vk = m[1] === "skiavk";
     return {
       kind: "renderer",
-      msg: S.lang === "uk"
-        ? `Глобальний рендерер: ${vk ? "Vulkan" : "OpenGL"}`
-        : `Global renderer: ${vk ? "Vulkan" : "OpenGL"}`,
+      renderer: m[1],
       tag: vk ? "VK" : "GL",
     };
   }
 
-  // Client-side GPU events (already humanized)
+  // GPU composition on/off (server or previously-written client lines)
   if (/GPU|компонуванн|composition/i.test(body) && /увімк|вимк|on|off|enabled|disabled/i.test(body)) {
-    return { kind: "gpu", msg: body, tag: "GPU" };
+    const on = /увімк|:\s*on\b|enabled/i.test(body);
+    return { kind: "gpu", on, tag: "GPU" };
   }
 
   return null; // drop everything else
+}
+
+/** Localize a structured event for the active language. */
+function formatEvent(ev) {
+  if (!ev) return "";
+  const uk = S.lang === "uk";
+  const ren = (r) => (r === "skiavk" ? "Vulkan" : "OpenGL");
+  switch (ev.kind) {
+    case "target_set":
+      return uk
+        ? `Таргет: ${ev.pkg} → ${ren(ev.renderer)}`
+        : `Target: ${ev.pkg} → ${ren(ev.renderer)}`;
+    case "target_upd":
+      return uk
+        ? `Оновлено: ${ev.pkg} → ${ren(ev.renderer)}`
+        : `Updated: ${ev.pkg} → ${ren(ev.renderer)}`;
+    case "target_rm":
+      return uk ? `Таргет знято: ${ev.pkg}` : `Target removed: ${ev.pkg}`;
+    case "target_en":
+      return uk
+        ? (ev.on ? `Таргет увімкнено: ${ev.pkg}` : `Таргет вимкнено: ${ev.pkg}`)
+        : (ev.on ? `Target enabled: ${ev.pkg}` : `Target disabled: ${ev.pkg}`);
+    case "renderer":
+      return uk
+        ? `Глобальний рендерер: ${ren(ev.renderer)}`
+        : `Global renderer: ${ren(ev.renderer)}`;
+    case "gpu":
+      return uk
+        ? (ev.on ? "GPU-компонування екрана: увімкнено" : "GPU-компонування екрана: вимкнено")
+        : (ev.on ? "GPU screen composition: on" : "GPU screen composition: off");
+    default:
+      return ev.msg || "";
+  }
 }
 
 function parseLogs(out) {
@@ -247,24 +291,26 @@ function parseLogs(out) {
     line = line.trim();
     if (!line || line === "(no logs)") return;
     const time = extractTime(line);
-    const ev = humanizeEvent(line);
+    const ev = parseEvent(line);
     if (!ev) return;
-    const key = (time || "") + "|" + ev.msg;
+    const key = (time || "") + "|" + ev.kind + "|" + (ev.pkg || "") + "|" + (ev.renderer || "") + "|" + (ev.on === undefined ? "" : ev.on);
     if (seen.has(key)) return;
     seen.add(key);
-    rows.push({ time: time || "—", msg: ev.msg, tag: ev.tag || "", kind: ev.kind });
+    rows.push({ time: time || "—", tag: ev.tag || "", kind: ev.kind, pkg: ev.pkg, renderer: ev.renderer, on: ev.on });
   });
   return rows.slice(-30).reverse();
 }
 
-/** Push a clean local event (shown immediately after user action) */
-function pushEvent(msg, tag) {
-  const now = new Date();
-  const time =
-    String(now.getHours()).padStart(2, "0") +
-    ":" +
-    String(now.getMinutes()).padStart(2, "0");
-  S.logs.unshift({ time, msg, tag: tag || "", kind: "local" });
+/** Push a structured local event (shown immediately after user action). */
+function pushEvent(ev) {
+  const time = nowTime();
+  const row = Object.assign({ time, tag: "", source: "local" }, ev);
+  if (!row.tag && row.kind === "renderer") row.tag = row.renderer === "skiavk" ? "VK" : "GL";
+  if (!row.tag && row.kind === "gpu") row.tag = "GPU";
+  if (!row.tag && (row.kind === "target_set" || row.kind === "target_upd") && row.renderer) {
+    row.tag = row.renderer === "skiavk" ? "VK" : "GL";
+  }
+  S.logs.unshift(row);
   if (S.logs.length > 30) S.logs.length = 30;
 }
 
@@ -280,12 +326,7 @@ async function setGlobalRenderer(val) {
   await skiactl("renderer", "set", val);
   S.renderer = val;
   const vk = val === "skiavk";
-  pushEvent(
-    S.lang === "uk"
-      ? `Глобальний рендерер: ${vk ? "Vulkan" : "OpenGL"}`
-      : `Global renderer: ${vk ? "Vulkan" : "OpenGL"}`,
-    vk ? "VK" : "GL"
-  );
+  pushEvent({ kind: "renderer", renderer: val });
   await refreshStatus();
   render();
 }
@@ -442,9 +483,11 @@ function loadPackages() {
 async function loadLogs() {
   const fromServer = parseLogs(await skiactl("logs"));
   // Keep recent local (client-pushed) events that may not yet be in the log file
-  const local = (S.logs || []).filter((r) => r.kind === "local");
-  const seen = new Set(fromServer.map((r) => (r.time || "") + "|" + r.msg));
-  const merged = [...local.filter((r) => !seen.has((r.time || "") + "|" + r.msg)), ...fromServer];
+  const local = (S.logs || []).filter((r) => r.source === "local");
+  const keyOf = (r) =>
+    (r.time || "") + "|" + (r.kind || "") + "|" + (r.pkg || "") + "|" + (r.renderer || "") + "|" + (r.on === undefined ? "" : r.on);
+  const seen = new Set(fromServer.map(keyOf));
+  const merged = [...local.filter((r) => !seen.has(keyOf(r))), ...fromServer];
   S.logs = merged.slice(0, 30);
 }
 
@@ -455,22 +498,14 @@ async function setTargetRenderer(pkg, val) {
     if (!cur) return;
     await skiactl("target", "remove", pkg);
     S.targets.delete(pkg);
-    pushEvent(
-      S.lang === "uk" ? `Таргет знято: ${pkg}` : `Target removed: ${pkg}`,
-      ""
-    );
+    pushEvent({ kind: "target_rm", pkg });
   } else if (val === "skiavk" || val === "skiagl") {
     if (hasOv && cur.renderer === val) return;
     if (cur) await skiactl("target", "set", pkg, val);
     else await skiactl("target", "add", pkg, val);
     S.targets.set(pkg, { renderer: val, enabled: true });
     const vk = val === "skiavk";
-    pushEvent(
-      S.lang === "uk"
-        ? `Таргет: ${pkg} → ${vk ? "Vulkan" : "OpenGL"}`
-        : `Target: ${pkg} → ${vk ? "Vulkan" : "OpenGL"}`,
-      vk ? "VK" : "GL"
-    );
+    pushEvent({ kind: "target_set", pkg, renderer: val });
   } else {
     return;
   }
@@ -575,16 +610,7 @@ async function toggleGpu() {
   if (val !== "0" && val !== "1") return;
   await execRaw("setprop persist.skia.force_gpu " + val);
   await execRaw("service call SurfaceFlinger 1008 i32 " + val);
-  pushEvent(
-    S.lang === "uk"
-      ? (S.forceGpu
-          ? "GPU-компонування екрана: увімкнено"
-          : "GPU-компонування екрана: вимкнено")
-      : (S.forceGpu
-          ? "GPU screen composition: on"
-          : "GPU screen composition: off"),
-    "GPU"
-  );
+  pushEvent({ kind: "gpu", on: S.forceGpu });
   dashboard();
 }
 
@@ -708,7 +734,8 @@ function dashboard() {
     S.logs.length > 0
       ? S.logs.map((r) => {
           const tag = r.tag || "";
-          return `<div class="logrow"><time>${escapeHtml(r.time || "—")}</time><span>${escapeHtml(r.msg)}</span>${tag ? `<em class="${escapeAttr(tag.toLowerCase())}">${escapeHtml(tag)}</em>` : ""}</div>`;
+          const msg = formatEvent(r);
+          return `<div class="logrow"><time>${escapeHtml(r.time || "—")}</time><span>${escapeHtml(msg)}</span>${tag ? `<em class="${escapeAttr(tag.toLowerCase())}">${escapeHtml(tag)}</em>` : ""}</div>`;
         }).join("")
       : `<div class="log-empty">${t("empty_status")}</div>`;
 
@@ -764,6 +791,7 @@ function dashboard() {
   });
 
   $("#gpuToggle")?.addEventListener("click", () => toggleGpu());
+  installCustomScrollbar();
 }
 
 /* ── Packages page ────────────────────────────────────────────────────── */
@@ -808,6 +836,10 @@ let customScrollDrag = null;
 let customScrollRect = null;
 
 function customScrollHost() {
+  /* Active page scroll container: packages list or dashboard events log. */
+  if (S.page === "dashboard") {
+    return document.querySelector(".log:not(.is-empty)");
+  }
   return document.querySelector(".list:not(.is-empty)");
 }
 
@@ -822,7 +854,7 @@ function customScrollMeasure() {
   const max = Math.max(0, el.scrollHeight - el.clientHeight);
   if (track <= 0 || max <= 0) return null;
   const thumb = Math.max(28, Math.min(track, Math.round(track * el.clientHeight / el.scrollHeight)));
-  return { el, top, track, thumb, max, x: Math.round(r.right - 5) };
+  return { el, top, track, thumb, max, x: Math.round(r.right - 8) };
 }
 
 function customScrollRender(show = false) {
