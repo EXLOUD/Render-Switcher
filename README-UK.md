@@ -27,7 +27,7 @@
     <img src="assets/webui-opengl.png" width="300" alt="Render Switcher WebUI — OpenGL">
   </p>
 
-  ![Версія](https://img.shields.io/badge/Версія-v1.0.0-6d4dee?style=for-the-badge)
+  ![Версія](https://img.shields.io/badge/Версія-v1.0.1-6d4dee?style=for-the-badge)
   ![Root](https://img.shields.io/badge/Magisk%20%7C%20KernelSU%20%7C%20APatch-222222?style=for-the-badge)
   ![Zygisk](https://img.shields.io/badge/Zygisk-потрібен-success?style=for-the-badge)
   ![Архітектура](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86%20%7C%20x86__64-blue?style=for-the-badge)
