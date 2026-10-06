@@ -3,7 +3,7 @@
 ### 👇
 
   <p>
-    <a href="https://github.com/EXLOUD/Render-Switcher/releases/download/v1.0.1/Render_Switcher_v1.0.1.zip">
+    <a href="https://github.com/EXLOUD/Render-Switcher/releases/download/v1.0.2/Render_Switcher_v1.0.2.zip">
       <img src="https://img.shields.io/badge/Завантажити_Render_Switcher-2ea44f?style=flat&logo=download&logoColor=white" height="40" alt="Завантажити Render Switcher">
     </a>
   </p>
@@ -27,7 +27,7 @@
     <img src="assets/webui-opengl.png" width="300" alt="Render Switcher WebUI — OpenGL">
   </p>
 
-  ![Версія](https://img.shields.io/badge/Версія-v1.0.1-6d4dee?style=for-the-badge)
+  ![Версія](https://img.shields.io/badge/Версія-v1.0.2-6d4dee?style=for-the-badge)
   ![Root](https://img.shields.io/badge/Magisk%20%7C%20KernelSU%20%7C%20APatch-222222?style=for-the-badge)
   ![Zygisk](https://img.shields.io/badge/Zygisk-потрібен-success?style=for-the-badge)
   ![Архітектура](https://img.shields.io/badge/ABI-arm64--v8a%20%7C%20armeabi--v7a%20%7C%20x86%20%7C%20x86__64-blue?style=for-the-badge)
