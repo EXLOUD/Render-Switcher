@@ -28,6 +28,8 @@ prop_set() {
 # Android-style package name:
 #   segment = [A-Za-z][A-Za-z0-9_]*
 #   package = segment ('.' segment)+
+# (>= 2 segments on purpose: zygisk/src/main.cpp validPackage() requires the same,
+#  so skiactl must not accept names the Zygisk side would silently ignore)
 # Rejects: empty, path traversal, consecutive dots, leading/trailing dots,
 #          shell metacharacters, overly long names.
 is_valid_package() {
@@ -87,7 +89,9 @@ list_installed_packages() {
     esac
 }
 
-# mkdir-based lock with stale PID cleanup
+# mkdir-based lock with stale-lock cleanup.
+#  - owner PID dead            -> stale, removed immediately
+#  - no/empty pid file for 2 s -> owner died between mkdir and writing the pid
 acquire_lock() {
     name="$1"
     timeout="${2:-10}"
@@ -98,15 +102,25 @@ acquire_lock() {
     lockpath="${LOCK_DIR}/${name}.lock"
     mkdir -p "$LOCK_DIR" 2>/dev/null
     i=0
+    nopid=0
     while [ "$i" -lt "$timeout" ]; do
         if mkdir "$lockpath" 2>/dev/null; then
             echo "$$" > "${lockpath}/pid"
             return 0
         fi
-        if [ -f "${lockpath}/pid" ]; then
-            old=$(cat "${lockpath}/pid" 2>/dev/null)
-            if [ -n "$old" ] && ! kill -0 "$old" 2>/dev/null; then
+        old=""
+        [ -f "${lockpath}/pid" ] && old=$(cat "${lockpath}/pid" 2>/dev/null)
+        if [ -n "$old" ]; then
+            nopid=0
+            if ! kill -0 "$old" 2>/dev/null; then
                 rm -rf "$lockpath" 2>/dev/null
+                continue
+            fi
+        else
+            nopid=$((nopid + 1))
+            if [ "$nopid" -ge 3 ]; then
+                rm -rf "$lockpath" 2>/dev/null
+                nopid=0
                 continue
             fi
         fi

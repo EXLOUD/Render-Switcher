@@ -1,7 +1,7 @@
 /* Render Switcher WebUI — premium concept UI + skiactl backend */
 
 const SKIACTL = "/data/adb/modules/render_switcher/bin/skiactl";
-const APP_VERSION = "v1.0.1"; /* hard-coded; keep in sync with module.prop */
+const APP_VERSION = "v1.0.2"; /* hard-coded; keep in sync with module.prop */
 const LANG_KEY = "render_switcher_lang";
 const DEFAULT_LANG = "uk";
 const GPU_KEY = "render_switcher_force_gpu";
@@ -346,7 +346,7 @@ function pkgSig() {
 }
 
 /* ── Package source ───────────────────────────────────────────────────────
- * Fast path (same approach as Device Faker): the native KernelSU WebView API.
+ * Fast path: the native KernelSU WebView API.
  *   ksu.listPackages(type)      -> JSON array of package names (no shell spawn)
  *   ksu.getPackagesInfo([...])  -> JSON array with appLabel in ONE batched call
  *   ksu://icon/<pkg>            -> app icon, loaded lazily
@@ -750,14 +750,14 @@ function dashboard() {
         <div class="choice ${vk ? "active" : ""}" data-ren="skiavk">
           <div class="choice-top">
             <span class="mark">VK</span>
-            <span class="check">${vk ? "✓" : ""}</span>
+            <span class="check"><svg viewBox="0 0 24 24"><circle class="ring" cx="12" cy="12" r="9"/><path class="tick" d="M7.5 12.5l3 3 6-6"/></svg></span>
           </div>
           <small>Vulkan · skiavk</small>
         </div>
         <div class="choice ${!vk ? "active" : ""}" data-ren="skiagl">
           <div class="choice-top">
             <span class="mark">GL</span>
-            <span class="check">${!vk ? "✓" : ""}</span>
+            <span class="check"><svg viewBox="0 0 24 24"><circle class="ring" cx="12" cy="12" r="9"/><path class="tick" d="M7.5 12.5l3 3 6-6"/></svg></span>
           </div>
           <small>OpenGL · skiagl</small>
         </div>
@@ -796,12 +796,14 @@ function dashboard() {
 
 /* ── Packages page ────────────────────────────────────────────────────── */
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
-const iconState = new Map();   /* pkg -> 1 (loaded) | 0 (failed) */
+const iconState = new Map();   /* pkg -> 1 (loaded) | 0 (failed for good) */
+const iconTries = new Map();   /* pkg -> failed attempts so far */
+const iconInflight = new Map();/* pkg -> { box, timer } */
 let iconIO = null;
-let iconQueue = [];
-let iconQueued = new Set();
-let iconActive = 0;
-const ICON_CONCURRENCY = 2;
+let iconQueue = [];            /* boxes waiting for a free slot */
+const ICON_CONCURRENCY = 1000;  /* effectively unlimited */
+const ICON_MAX_TRIES = 4;
+const ICON_TIMEOUT = 10000;
 let searchTimer = 0;
 
 function scrollState() {
@@ -939,48 +941,107 @@ window.addEventListener("resize", () => customScrollSchedule(false), { passive: 
 window.visualViewport?.addEventListener("resize", () => customScrollSchedule(false), { passive: true });
 
 
-/* Lazy icon loading: the <img> gets its src only when the row scrolls into
- * view (IntersectionObserver), exactly like Device Faker. */
+/* Lazy icon loading with retries.
+ * - load/error are handled by delegated capture listeners, so events of <img>
+ *   elements that were thrown away by a list rebuild are ignored and never
+ *   leak a concurrency slot.
+ * - every request has a timeout; a hung ksu://icon request can't stall the queue.
+ * - a failure is retried (ICON_MAX_TRIES) before the letter placeholder is
+ *   shown for good, and "failed" is forgotten when the Packages page opens. */
+const iconUrl = (pkg) => "ksu://icon/" + pkg;
+
+function startIcon(box) {
+  const pkg = box.getAttribute("data-pkg");
+  const img = box.firstElementChild;
+  if (!pkg || !img) return;
+  const timer = setTimeout(() => iconFail(pkg, box), ICON_TIMEOUT);
+  iconInflight.set(pkg, { box, timer });
+  img.src = iconUrl(pkg);
+}
+
+function iconDone(pkg) {
+  const f = iconInflight.get(pkg);
+  if (f) clearTimeout(f.timer);
+  iconInflight.delete(pkg);
+}
+
+function iconOk(pkg, box) {
+  iconDone(pkg);
+  iconState.set(pkg, 1);
+  iconTries.delete(pkg);
+  box.classList.remove("noico");
+  box.classList.add("is-ok");
+  pumpIcons();
+}
+
+function iconFail(pkg, box) {
+  iconDone(pkg);
+  const img = box.firstElementChild;
+  if (img) img.removeAttribute("src");
+  box.classList.remove("is-ok");
+  if (!box.isConnected) { pumpIcons(); return; }   /* row was rebuilt: new row retries itself */
+  const n = (iconTries.get(pkg) || 0) + 1;
+  iconTries.set(pkg, n);
+  if (n >= ICON_MAX_TRIES) {
+    iconState.set(pkg, 0);
+    box.classList.add("noico");
+  } else {
+    setTimeout(() => {
+      if (box.isConnected && !box.classList.contains("is-ok") && !box.classList.contains("noico")) {
+        iconQueue.push(box);
+        pumpIcons();
+      }
+    }, 300 * n);
+  }
+  pumpIcons();
+}
+
 function pumpIcons() {
-  while (iconActive < ICON_CONCURRENCY && iconQueue.length) {
+  while (iconInflight.size < ICON_CONCURRENCY && iconQueue.length) {
     const box = iconQueue.shift();
     if (!box || !box.isConnected || box.classList.contains("is-ok") ||
         box.classList.contains("noico")) continue;
-
-    const img = box.firstElementChild;
     const pkg = box.getAttribute("data-pkg");
-    if (!img || !pkg) continue;
-
-    iconQueued.delete(pkg);
-    iconActive++;
-    img.onload = () => {
-      iconState.set(pkg, 1);
-      box.classList.add("is-ok");
-      iconActive--;
-      pumpIcons();
-    };
-    img.onerror = () => {
-      iconState.set(pkg, 0);
-      box.classList.add("noico");
-      iconActive--;
-      pumpIcons();
-    };
-    img.src = "ksu://icon/" + pkg;
+    if (!pkg || iconInflight.has(pkg)) continue;
+    startIcon(box);
   }
 }
 
 function queueIcon(box) {
   const pkg = box.getAttribute("data-pkg");
-  if (!pkg || iconQueued.has(pkg) || iconState.has(pkg)) return;
-  iconQueued.add(pkg);
+  if (!pkg) return;
+  const st = iconState.get(pkg);
+  if (st === 0) { box.classList.add("noico"); return; }
+  if (st === 1) {   /* known good: just attach it to the (new) row */
+    const img = box.firstElementChild;
+    if (img && img.getAttribute("src") !== iconUrl(pkg)) img.src = iconUrl(pkg);
+    box.classList.add("is-ok");
+    return;
+  }
   iconQueue.push(box);
   pumpIcons();
 }
 
+function onIconEvent(e) {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement)) return;
+  const box = img.parentElement;
+  if (!box || !box.classList.contains("appico")) return;
+  const pkg = box.getAttribute("data-pkg");
+  if (!pkg || !img.getAttribute("src")) return;
+  if (e.type === "load") { iconOk(pkg, box); return; }
+  iconState.delete(pkg);   /* an icon that was OK before can fail too */
+  iconFail(pkg, box);
+}
+document.addEventListener("load", onIconEvent, true);
+document.addEventListener("error", onIconEvent, true);
+
 function observeIcons() {
   if (iconIO) { iconIO.disconnect(); iconIO = null; }
   iconQueue = [];
-  iconQueued.clear();
+  /* old rows are gone: drop their in-flight requests so no slot stays busy */
+  iconInflight.forEach((f) => clearTimeout(f.timer));
+  iconInflight.clear();
 
   const pending = $$(".appico:not(.is-ok):not(.noico)");
   if (!pending.length) return;
@@ -997,9 +1058,9 @@ function observeIcons() {
       queueIcon(e.target);
     }
   }, {
-    root: list || null,
-    rootMargin: "96px 0px",
-    threshold: 0.01
+    root: null,            /* viewport */
+    rootMargin: "100px",
+    threshold: 0.1
   });
   pending.forEach((el) => iconIO.observe(el));
 }
@@ -1092,6 +1153,8 @@ function fillList(keepScroll) {
 
 function packages(keepScroll) {
   const saved = keepScroll ? scrollState() : null;
+  for (const [k, v] of iconState) if (v === 0) iconState.delete(k);
+  iconTries.clear();
   setAccent();
   closeRenMenu(false);
   $("#logo").innerHTML = "Render <b>Switcher</b>";

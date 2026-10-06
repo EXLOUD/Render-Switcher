@@ -24,7 +24,8 @@ Render Switcher control
   skiactl target get <pkg>
   skiactl target set <pkg> <renderer>
   skiactl target enable|disable <pkg>
-  skiactl zygisk
+  skiactl enforcement status|reset
+  skiactl zygisk [-v]        ok | missing | unknown (exit 0|1|2)
   skiactl logs
   skiactl packages [user|system|all]
   skiactl help
@@ -37,12 +38,22 @@ cmd_status() {
     echo "Render Switcher status"
     echo "-------------"
     echo "Global renderer : $(renderer_get_global)"
+    if [ "$ENFORCEMENT_DISABLED" = "1" ]; then
+        echo "Enforcement     : DISABLED (bootloop guard) - run: skiactl enforcement reset"
+    else
+        echo "Enforcement     : active"
+    fi
     echo "Data dir        : $DATA_DIR"
     echo "Targets file    : $TARGETS_CONF"
     echo "Per-app path    : Zygisk (targets.conf)"
     echo ""
     echo "Targets:"
-    target_list || echo "(none)"
+    _st_list=$(target_list)
+    if [ -n "$_st_list" ]; then
+        echo "$_st_list"
+    else
+        echo "(none)"
+    fi
 }
 
 cmd_renderer() {
@@ -54,6 +65,7 @@ cmd_renderer() {
                 save_setting GLOBAL_RENDERER "$2"
                 echo "Global renderer set to $2"
             else
+                echo "ERROR: could not set debug.hwui.renderer=$2 (see: skiactl logs)" >&2
                 exit 5
             fi
             ;;
@@ -72,16 +84,36 @@ force_stop_pkg() {
     fi
 }
 
+need_pkg() {
+    is_valid_package "$1" || { echo "ERROR: invalid package name: ${1:-<empty>}" >&2; exit 1; }
+}
+
+need_ren() {
+    is_valid_renderer "$1" || { echo "ERROR: renderer must be skiavk or skiagl (got: ${1:-<empty>})" >&2; exit 1; }
+}
+
 cmd_target() {
-    case "$1" in
+    sub=$1
+    # validate BEFORE taking the lock, and say why on stderr
+    case "$sub" in
+        add|set) need_pkg "$2"; need_ren "$3" ;;
+        remove|get|enable|disable) need_pkg "$2" ;;
+    esac
+    case "$sub" in
         add|remove|set|enable|disable)
             acquire_lock targets 10 || { echo "ERROR: targets busy" >&2; exit 6; }
-            trap 'release_lock targets' EXIT INT TERM
+            trap 'release_lock targets' EXIT
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
             ;;
     esac
-    case "$1" in
+    case "$sub" in
         list) target_list ;;
-        add) target_add "$2" "$3" && echo "Target added: $2 -> $3" || exit $?; force_stop_pkg "$2" ;;
+        add)
+            target_add "$2" "$3" || exit $?
+            echo "Target added: $2 -> $3"
+            force_stop_pkg "$2"
+            ;;
         remove)
             target_remove "$2" || exit $?
             # Confirm gone from file (stdout is what WebUI relies on)
@@ -98,7 +130,7 @@ cmd_target() {
             target_is_enabled "$2" && echo "enabled: yes" || echo "enabled: no"
             ;;
         set)
-            target_set_renderer "$2" "$3" || { rc=$?; echo "ERROR: set failed (rc=$rc): $2" >&2; exit $rc; }
+            target_set_renderer "$2" "$3" || { rc=$?; echo "ERROR: set failed (rc=$rc): $2 (not a target? use: target add)" >&2; exit $rc; }
             # Verify what is actually on disk before reporting success
             now=$(target_get_renderer "$2")
             if [ "$now" != "$3" ]; then
@@ -108,34 +140,97 @@ cmd_target() {
             echo "Updated: $2 -> $3"
             force_stop_pkg "$2"
             ;;
-        enable)  target_set_enabled "$2" 1 && echo "Enabled: $2" || exit $?; force_stop_pkg "$2" ;;
-        disable) target_set_enabled "$2" 0 && echo "Disabled: $2" || exit $?; force_stop_pkg "$2" ;;
+        enable)
+            target_set_enabled "$2" 1 || { rc=$?; echo "ERROR: enable failed (rc=$rc): $2" >&2; exit $rc; }
+            echo "Enabled: $2"
+            force_stop_pkg "$2"
+            ;;
+        disable)
+            target_set_enabled "$2" 0 || { rc=$?; echo "ERROR: disable failed (rc=$rc): $2" >&2; exit $rc; }
+            echo "Disabled: $2"
+            force_stop_pkg "$2"
+            ;;
         *) echo "Unknown target subcommand" >&2; exit 1 ;;
     esac
 }
 
-# Prints "ok" if a Zygisk implementation is active, otherwise "missing".
+# Bootloop guard (scripts/boot.sh) switches enforcement off for good after
+# repeated failed boots. This is the way back.
+cmd_enforcement() {
+    case "${1:-status}" in
+        status)
+            if [ "$ENFORCEMENT_DISABLED" = "1" ]; then echo "disabled"; else echo "active"; fi
+            ;;
+        reset)
+            save_setting ENFORCEMENT_DISABLED 0
+            ENFORCEMENT_DISABLED=0
+            echo 0 > "$BOOT_COUNTER" 2>/dev/null
+            log_info "enforcement re-enabled, boot counter reset"
+            renderer_set_global "${GLOBAL_RENDERER:-$DEFAULT_GLOBAL_RENDERER}" >/dev/null 2>&1
+            echo "Enforcement enabled, boot counter reset"
+            ;;
+        *) echo "enforcement status|reset" >&2; exit 1 ;;
+    esac
+}
+
+# Is a Zygisk implementation installed?   skiactl zygisk [-v]
+#   prints ok | missing | unknown      exit 0 | 1 | 2
+# Checked in this order (first hit wins):
+#   1. Magisk built-in Zygisk        (Settings -> Zygisk)
+#   2. library files shipped by Zygisk implementations: libzygisk.so /
+#      libzygisk64.so in an enabled module, or in /data/adb/ksu/lib
+# "unknown" = we could not look (not root / modules dir unreadable / the
+# Magisk database query failed) -- never reported as "missing".
+# This checks presence, not that it is running this boot; for that see the
+# Zygisk lines in `skiactl logs`.
 cmd_zygisk() {
-    # Magisk built-in Zygisk (Settings -> Zygisk)
+    mods="${MODULES_DIR:-/data/adb/modules}"
+    ksulib="${KSU_LIB_DIR:-/data/adb/ksu/lib}"
+    verbose=0
+    [ "$1" = "-v" ] && verbose=1
+    uncertain=0
+
+    zy_ok() {
+        [ "$verbose" = "1" ] && echo "ok ($1)" || echo ok
+        return 0
+    }
+
+    # 1. Magisk built-in Zygisk
     if has_cmd magisk; then
-        v=$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk'" 2>/dev/null \
-            | sed -n 's/^value=//p' | head -n 1)
-        if [ "$v" = "1" ]; then echo ok; return 0; fi
+        out=$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk'" 2>/dev/null)
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+            uncertain=1
+        else
+            v=$(printf '%s\n' "$out" | sed -n 's/^value=//p' | head -n 1)
+            [ "$v" = "1" ] && { zy_ok "Magisk built-in Zygisk"; return 0; }
+        fi
     fi
-    # Zygisk Next / ReZygisk / NeoZygisk (KernelSU, APatch, Magisk)
-    for d in /data/adb/modules/*; do
-        [ -d "$d" ] || continue
-        [ -f "$d/disable" ] && continue
-        [ -f "$d/remove" ] && continue
-        id=${d##*/}
-        case "$id" in
-            zygisksu|rezygisk|neozygisk|zygisk_next|zygisknext) echo ok; return 0 ;;
-        esac
-        nm=$(sed -n 's/^name=//p' "$d/module.prop" 2>/dev/null | head -n 1)
-        case "$nm" in
-            "Zygisk Next"*|ReZygisk*|NeoZygisk*|"Zygisk Next - "*) echo ok; return 0 ;;
-        esac
-    done
+
+    if [ ! -r "$mods" ] || [ ! -x "$mods" ]; then
+        uncertain=1
+    else
+        # 2. implementation library files (skip disabled / pending-removal modules)
+        for d in "$mods"/*; do
+            [ -d "$d" ] || continue
+            [ -f "$d/disable" ] && continue
+            [ -f "$d/remove" ] && continue
+            if find "$d" \( -name libzygisk.so -o -name libzygisk64.so \) 2>/dev/null | grep -q .; then
+                zy_ok "library in module ${d##*/}"
+                return 0
+            fi
+        done
+        if [ -d "$ksulib" ] && \
+           find "$ksulib" \( -name libzygisk.so -o -name libzygisk64.so \) 2>/dev/null | grep -q .; then
+            zy_ok "library in $ksulib"
+            return 0
+        fi
+    fi
+
+    if [ "$uncertain" = "1" ]; then
+        echo unknown
+        return 2
+    fi
     echo missing
     return 1
 }
@@ -150,7 +245,8 @@ case "$cmd" in
     status)   cmd_status ;;
     renderer) cmd_renderer "$@" ;;
     target)   cmd_target "$@" ;;
-    zygisk)   cmd_zygisk ;;
+    enforcement) cmd_enforcement "$@" ;;
+    zygisk)   cmd_zygisk "$@" ;;
     logs)     cmd_logs ;;
     packages) list_installed_packages "${1:-user}" ;;
     help|-h|--help) usage ;;

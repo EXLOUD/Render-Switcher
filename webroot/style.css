@@ -142,12 +142,16 @@ body::after{opacity:0;background:none}
 .choice-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap}
 .mark{font-size:clamp(24px,9.5cqi,36px);font-weight:900;line-height:1}
 .choice small{color:var(--mute);font-size:13px}
-.check{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);
-  display:grid;place-items:center;font-size:12px;font-weight:900;color:#0d0e13;flex:none}
+/* Concept 10: Morphing Circle → Check (SVG) */
+.check{width:24px;height:24px;display:grid;place-items:center;flex:none}
+.check svg{width:100%;height:100%}
+.check .ring{fill:none;stroke:var(--line);stroke-width:2;transition:stroke .2s}
+.check .tick{fill:none;stroke:transparent;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;transition:stroke .2s}
 .choice.active{border-color:var(--c);background:transparent;
   box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 14%,transparent),0 0 22px -8px var(--c)}
 .choice.active .mark{color:var(--c)}
-.choice.active .check{background:var(--c);border-color:var(--c)}
+.choice.active .check .ring{stroke:var(--c)}
+.choice.active .check .tick{stroke:var(--c)}
 
 /* ── Options / GPU toggle ───────────────────────────────────────────────── */
 .options{margin-top:22px;min-width:0}

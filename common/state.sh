@@ -40,9 +40,13 @@ append_log_line() {
     echo "$1" >> "$LOG_FILE"
 }
 
+_PERSIST_READY=""
+
 ensure_persistent_state() {
+    # once per process is enough (load_settings/save_setting/target_* all call it)
+    [ "$_PERSIST_READY" = "$DATA_DIR" ] && return 0
     mkdir -p "$DATA_DIR" "$CONFIG_DIR" "$STATE_DIR" "$LOCK_DIR" 2>/dev/null
-    chmod 755 "$DATA_DIR" "$CONFIG_DIR"
+    chmod 755 "$DATA_DIR" "$CONFIG_DIR" 2>/dev/null
     chmod 700 "$STATE_DIR" "$LOCK_DIR" 2>/dev/null
     prepare_log
 
@@ -66,11 +70,13 @@ ensure_persistent_state() {
         fi
         chmod 600 "$SETTINGS_CONF" 2>/dev/null
     fi
+    _PERSIST_READY="$DATA_DIR"
 }
 
 load_settings() {
     ensure_persistent_state
     GLOBAL_RENDERER="$DEFAULT_GLOBAL_RENDERER"
+    ENFORCEMENT_DISABLED=""
     if [ -f "$SETTINGS_CONF" ]; then
         while IFS= read -r line || [ -n "$line" ]; do
             case "$line" in
