@@ -1,6 +1,6 @@
 id=render_switcher_zygisk
 name=Render Switcher Zygisk
-version=v1.0.0
-versionCode=100
+version=v1.0.1
+versionCode=101
 author=EXLOUD
 description=Zygisk companion – process-level HWUI renderer isolation through process-private property-area COW patching.

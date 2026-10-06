@@ -1,5 +1,5 @@
 /*
- * Render Switcher - per-process HWUI renderer isolation (v1.0.0, COW method)
+ * Render Switcher - per-process HWUI renderer isolation (v1.0.1, COW method)
  *
  * No PLT hooks.  The renderer properties are patched inside this process's
  * own private copy of the bionic property-area page(s) that hold them:
@@ -47,6 +47,10 @@ constexpr const char *kTargetsPaths[] = {
     "/data/adb/modules/render_switcher/targets.conf",
     "/data/adb/render_switcher/config/targets.conf",
 };
+/* Written by skiactl / scripts/boot.sh.  ENFORCEMENT_DISABLED=1 is set by the
+ * bootloop guard and makes the companion report "not a target" for everything. */
+constexpr const char *kSettingsPath =
+    "/data/adb/render_switcher/config/settings.conf";
 constexpr const char *kPropHwui = "debug.hwui.renderer";
 constexpr const char *kPropVulkan = "ro.hwui.use_vulkan";
 constexpr const char *kTag = "RenderSwitcher";
@@ -93,6 +97,14 @@ bool validPackage(std::string_view pkg) {
     return segs >= 2;
 }
 
+/* In-place trim of spaces/tabs/CR/LF on both ends. */
+void trimWs(std::string &s) {
+    size_t b = 0, e = s.size();
+    while (b < e && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r' || s[b] == '\n')) ++b;
+    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t' || s[e - 1] == '\r' || s[e - 1] == '\n')) --e;
+    s = s.substr(b, e - b);
+}
+
 /* One "pkg=renderer[:0|false|no|off]" line -> (pkg, renderer).
  * Returns false for blank/comment/invalid/disabled lines. */
 bool parseTargetLine(std::string line, std::string *pkgOut,
@@ -122,6 +134,7 @@ bool parseTargetLine(std::string line, std::string *pkgOut,
     if (colon != std::string::npos) {
         renderer = rest.substr(0, colon);
         std::string flag = rest.substr(colon + 1);
+        trimWs(flag); /* "pkg=skiagl : 0" must read as disabled, like skiactl */
         if (flag == "0" || flag == "false" || flag == "no" || flag == "off")
             enabled = false;
     }
@@ -364,14 +377,63 @@ static void refreshTargetsLocked(const char *const *paths, size_t n) {
             g_conf_any ? "ok" : "MISSING");
 }
 
+static ConfState g_set_state;
+static bool g_set_loaded = false;
+static bool g_enforce_off = false;
+
+static bool sameConfState(const ConfState &a, const ConfState &b) {
+    return a.present == b.present && a.sec == b.sec && a.nsec == b.nsec &&
+           a.size == b.size;
+}
+
+/* Caller holds g_conf_mu.  Re-reads settings.conf only when it changed. */
+static void refreshSettingsLocked(const char *path) {
+    ConfState cur;
+    struct stat st {};
+    if (stat(path, &st) == 0) {
+        cur.present = true;
+        cur.sec = st.st_mtim.tv_sec;
+        cur.nsec = st.st_mtim.tv_nsec;
+        cur.size = st.st_size;
+    }
+    if (g_set_loaded && sameConfState(cur, g_set_state)) return;
+    g_set_state = cur;
+    g_set_loaded = true;
+
+    bool off = false;
+    if (cur.present) {
+        std::ifstream in(path);
+        std::string line;
+        while (std::getline(in, line)) {
+            trimWs(line);
+            if (line.empty() || line[0] == '#') continue;
+            auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::string key = line.substr(0, eq), val = line.substr(eq + 1);
+            trimWs(key);
+            trimWs(val);
+            if (key == "ENFORCEMENT_DISABLED") off = (val == "1"); /* last wins */
+        }
+    }
+    if (off != g_enforce_off)
+        log_msg("companion: enforcement %s (settings.conf)",
+                off ? "DISABLED by bootloop guard - no app is touched"
+                    : "enabled again");
+    g_enforce_off = off;
+}
+
 /* 1 = found, 0 = not a target, -2 = no readable conf */
 static int lookupTarget(const std::string &pkg, std::string *renderer,
-                        const char *const *paths, size_t n) {
+                        const char *const *paths, size_t n,
+                        const char *settingsPath = kSettingsPath) {
     pthread_mutex_lock(&g_conf_mu);
     refreshTargetsLocked(paths, n);
+    refreshSettingsLocked(settingsPath);
     int rc;
     auto it = g_targets.find(pkg);
-    if (it != g_targets.end()) {
+    if (g_enforce_off) {
+        rc = 0; /* bootloop guard tripped: behave as if nothing is a target */
+    } else if (it != g_targets.end()) {
         *renderer = it->second;
         rc = 1;
     } else {
