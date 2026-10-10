@@ -7,8 +7,8 @@ const DEFAULT_LANG = "uk";
 const GPU_KEY = "render_switcher_force_gpu";
 
 const store = {
-  get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* storage unavailable */ } },
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
 };
 
 const S = {
@@ -325,7 +325,6 @@ async function setGlobalRenderer(val) {
   if (val !== "skiavk" && val !== "skiagl") return;
   await skiactl("renderer", "set", val);
   S.renderer = val;
-  const vk = val === "skiavk";
   pushEvent({ kind: "renderer", renderer: val });
   await refreshStatus();
   render();
@@ -363,7 +362,7 @@ const tick = () => new Promise((res) => setTimeout(res, 0));
 
 function parseJson(v) {
   if (typeof v !== "string") return v;
-  try { return JSON.parse(v); } catch (_) { return null; }
+  try { return JSON.parse(v); } catch { return null; }
 }
 
 function nativeList(type) {
@@ -372,7 +371,7 @@ function nativeList(type) {
   try {
     const r = parseJson(k.listPackages(type));
     return Array.isArray(r) ? r.filter((p) => typeof p === "string" && p) : null;
-  } catch (_) { return null; }
+  } catch { return null; }
 }
 
 function nativeInfo(names) {
@@ -381,7 +380,7 @@ function nativeInfo(names) {
   try {
     const r = parseJson(k.getPackagesInfo(JSON.stringify(names)));
     return Array.isArray(r) ? r : (r ? [r] : []);
-  } catch (_) { return []; }
+  } catch { return []; }
 }
 
 function iconsSupported() {
@@ -504,7 +503,6 @@ async function setTargetRenderer(pkg, val) {
     if (cur) await skiactl("target", "set", pkg, val);
     else await skiactl("target", "add", pkg, val);
     S.targets.set(pkg, { renderer: val, enabled: true });
-    const vk = val === "skiavk";
     pushEvent({ kind: "target_set", pkg, renderer: val });
   } else {
     return;
@@ -1050,7 +1048,6 @@ function observeIcons() {
     return;
   }
 
-  const list = $(".list");
   iconIO = new IntersectionObserver((entries) => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
@@ -1191,7 +1188,7 @@ function packages(keepScroll) {
     });
     if (document.activeElement === qInput || S.q) {
       qInput.focus();
-      try { qInput.setSelectionRange(qInput.value.length, qInput.value.length); } catch (_) {}
+      try { qInput.setSelectionRange(qInput.value.length, qInput.value.length); } catch { /* unsupported input type */ }
     }
   }
 
